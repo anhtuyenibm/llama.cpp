@@ -773,11 +773,27 @@ static inline unsigned char ggml_endian_byte(int i) {
        return ((unsigned char *)&tmp_val)[i];
 }
 #define GGML_ENDIAN_BYTE(i) ggml_endian_byte(i)
+#if defined(__BIG_ENDIAN__)
+// On big-endian, vec_pack_to_short_fp32 (built on vec_mergeo in altivec.h) does not produce
+// 8 packed halfwords (seen with IBM Open XL 17.1.4 on AIX). xvcvsphp leaves each converted
+// half in the low halfword of its word, so take halfwords 1,3,5,7 of both inputs with vec_perm.
+// GGML_F16_VEC_LOAD maps r[i - 1] / r[i] to the high / low four elements, so r[i] goes first.
+static inline vector unsigned short ggml_pack_to_short_fp32_be(vector float a, vector float b) {
+  const vector unsigned char pm = {2,3,6,7,10,11,14,15, 18,19,22,23,26,27,30,31};
+  return (vector unsigned short) vec_perm((vector unsigned char) __builtin_vsx_xvcvsphp(a),
+                                          (vector unsigned char) __builtin_vsx_xvcvsphp(b), pm);
+}
+#define GGML_F16_VEC_STORE(p, r, i)                             \
+  if (i & 0x1)                                                  \
+    vec_xst(ggml_pack_to_short_fp32_be(r[i], r[i - 1]),         \
+            0, p - GGML_F16_EPR)
+#else
 #define GGML_F16_VEC_STORE(p, r, i)                             \
   if (i & 0x1)                                                  \
     vec_xst(vec_pack_to_short_fp32(r[i - GGML_ENDIAN_BYTE(1)],  \
                                    r[i - GGML_ENDIAN_BYTE(0)]), \
             0, p - GGML_F16_EPR)
+#endif
 
 //BF16 POWER9
 #define GGML_BF16_STEP 16
